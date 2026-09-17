@@ -1,0 +1,13 @@
+# Configuration (contains API URLs)
+fpvt2google.json
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Capture / log files
+*.jsonl
+*.log
