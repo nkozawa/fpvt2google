@@ -1,4 +1,8 @@
+//const url = "https://docs.google.com/spreadsheets/d/1ArZOQzExKNQ1GVvxW2IaAUTiaSKguhe6OOBOBisOe-8/edit?gid=12949935#gid=12949935";
+//const sheet = SpreadsheetApp.openByUrl(url);
 const sheet = SpreadsheetApp.getActiveSpreadsheet();
+
+// todo
 
 //function test() {
 //  let rawdataSheet = sheet.getSheetByName('RAWDATA');
@@ -63,8 +67,11 @@ function raceStatus(timestamp, camera, laps, laptime, totaltime, pilotname) {
       statusSheet.getRange(col+"25").setValue(Number(totaltime));
 //      statusSheet.getRange(col+"25").setValue(Number(total+currentlap));
     }
-    let bar = statusSheet.getRange(col+(23-laps)+":"+col+"22")
-    bar.clear();
+    let bararea = statusSheet.getRange(col+"1"+":"+col+"22");
+    bararea.clear();
+    bararea.setBackground("Gray");
+    let bar = statusSheet.getRange(col+(23-laps)+":"+col+"22");
+    //bar.clear();
     bar.setBackground(color);
     let rng = statusSheet.getRange(col+(23-laps));
     rng.setFontColor(fontColor);

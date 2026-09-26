@@ -1,7 +1,14 @@
+//const url = "https://docs.google.com/spreadsheets/d/1ArZOQzExKNQ1GVvxW2IaAUTiaSKguhe6OOBOBisOe-8/edit?gid=12949935#gid=12949935";
+//const sheet = SpreadsheetApp.openByUrl(url);
 const sheet = SpreadsheetApp.getActiveSpreadsheet();
 const rawdataSheet = sheet.getSheetByName('RAWDATA');
 const qualifySheet = sheet.getSheetByName('予選順位表');
-const finalSheet = sheet.getSheetByName('最終順位表');
+const finalSheet = sheet.getSheetByName('順位表');
+
+// todo
+// - コメントの日本語化
+//   
+// - 予選は順位表と予選順位表の両方に書く
 
 //function test() {
 //  let rawdataSheet = sheet.getSheetByName('RAWDATA');
@@ -12,6 +19,17 @@ const finalSheet = sheet.getSheetByName('最終順位表');
 //  Logger.log(sheetName);
 //}
 
+function trans(status) {
+  if (status == "") return " ";
+  let status2 = status.replace('cut', '順位確定(予選)');
+  status2 = status2.replace('out', '順位確定(勝ち上がり戦)');
+  status2 = status2.replace('advances','上位へ勝ち上がり');
+  status2 = status2.replace('enters','勝ち上がり戦');
+  status2 = status2.replace('finalist', '決勝戦進出')
+  status2 = status2.replace('final', '決勝戦')
+  return status2;
+}
+
 function dataAnal(timestamp, type, stagesData) {
   // ステージ名
   var stageName = stagesData[0].Name;
@@ -19,27 +37,36 @@ function dataAnal(timestamp, type, stagesData) {
   // ヘッダー情報（"Laps", "Time", "Status"）
   var headings = stagesData[0].Standings.Headings;
   Logger.log("ヘッダー: " + headings.join(", "));
-  const resultSheet = (type == "final") ? finalSheet : qualifySheet;
 
-  resultSheet.getRange("G3").setValue(stageName);
+  // 書き込み先シートの決定（qualifyの場合は両方、finalの場合はfinalSheetのみ）
+  let targetSheets = [];
+  if (type == "final") {
+    targetSheets = [finalSheet];
+  } else {
+    targetSheets = [finalSheet, qualifySheet];
+  }
 
   let result = [];
-  // 各選手のデータをループで処理
   var rows = stagesData[0].Standings.Rows;
   rows.forEach(function(row, index) {
     var pilotName = row.Name;          // 選手名 (例: Shu_FPV)
     //var pilotId = row.PilotId;          // パイロットID
     var laps = row.Values[0];           // Laps (Values配列の0番目)
     var time = row.Values[1];           // Time (Values配列の1番目)
-    var status = row.Values[2];         // Status (Values配列の2番目)
+    var status = (typeof row.Values[2] == 'undefined') ? "" : trans(row.Values[2]);
     result.push([index + 1, pilotName, laps, time, "", status]);  
     Logger.log((index + 1) + "位(?): " + pilotName + " (Laps: " + laps + ", Time: " + time + ", Status: " + status + ")");
   });
+  
   for (let i = result.length; i <= 100; i++) {
     result.push(["","","","","",""]);
   }
-  resultSheet.getRange(5, 2, result.length, result[0].length).setValues(result);
 
+  // 対象となるすべてのシートに同じデータを書き込む
+  targetSheets.forEach(function(sheet) {
+    sheet.getRange("G3").setValue(stageName);
+    sheet.getRange(5, 2, result.length, result[0].length).setValues(result);
+  });
 }
 
 function doPost(e) {
@@ -57,5 +84,4 @@ function doPost(e) {
     throw new Error("Lock timeout");
   }
 }
-// End of Tiny View Plus OSC process
 
