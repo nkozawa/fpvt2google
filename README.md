@@ -14,7 +14,7 @@
 
 - **ラップデータの中継** — ゲート通過ごとのラップタイム・総飛行時間を POST
 - **順位表の中継** — `Stages.json` を監視し、予選・決勝の順位表が変わったら POST
-- **ローカル表示** — `:8766` で同一 LAN からも閲覧可能なダッシュボードを提供
+- **ローカル表示** — `:5705` で同一 LAN からも閲覧可能なダッシュボードを提供（目次＋4ページ）
 - **録画・再生** — 受信イベントを JSONL で保存・再生してオフライン開発が可能
 
 #### 特徴
@@ -38,8 +38,8 @@ python3 fpvt2google.py --init
 #    NotificationURL = http://127.0.0.1:8765/
 #    → FPVTrackside を再起動
 
-# 4. 疎通確認（dry-run: POST せずログに出力）
-python3 fpvt2google.py --dry-run
+# 4. 疎通確認（local-only: POST せずローカル表示だけ動かす）
+python3 fpvt2google.py --local-only
 
 # 5. 本番起動
 python3 fpvt2google.py
@@ -81,7 +81,7 @@ MIT License
 
 - **Lap data relay** — POSTs lap times and total flight time on each gate detection
 - **Standings relay** — Monitors `Stages.json` and POSTs qualification/final standings when changed
-- **Local dashboard** — Serves a web page on `:8766`, accessible from any device on the same LAN
+- **Local dashboard** — Serves a multi-page web app on `:5705` (TOC + 4 pages), accessible from any device on the same LAN
 - **Record & replay** — Captures raw events as JSONL for offline development and testing
 
 #### Highlights
@@ -105,8 +105,8 @@ python3 fpvt2google.py --init
 #    NotificationURL = http://127.0.0.1:8765/
 #    → Restart FPVTrackside
 
-# 4. Test connectivity (dry-run: logs without POSTing)
-python3 fpvt2google.py --dry-run
+# 4. Test connectivity (local-only: local display only, no POSTing)
+python3 fpvt2google.py --local-only
 
 # 5. Run for real
 python3 fpvt2google.py

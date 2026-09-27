@@ -24,7 +24,8 @@ FPVTrackside で計測中のレース状況を、外部の表示システムへ�
 - FPVTrackside の **Gate / LED POST 通知（ExtensionMode）** を HTTP で受信し、
   ラップデータを整形して指定 URL へ POST する
 - イベントフォルダの **`Stages.json` を監視**し、順位表が変わったら指定 URL へ POST する
-- 同じ内容を **ローカルの Web ページ**（既定 `:8766`）にも表示する
+- 同じ内容を **ローカルの Web ページ**（既定 `:5705`）にも表示する。
+  `/` を目次に、レース・ステータス・予選順位表・最新順位・ライブ（診断）の4ページを出す（§8）
 - 受信した生イベントの **録画／再生**（アプリ無しで開発・検証できる）
 
 ### 1.3 できないこと（設計上の割り切り）
@@ -49,7 +50,7 @@ FPVTrackside で計測中のレース状況を、外部の表示システムへ�
  ┌──────────────┐    │  ④Stages.json 監視（デバウンス）          │   POST   ┌──────────────┐
  │ events/<id>/ ├────►  mtime+size が2回連続一致 → Type 判定 ────┼────────► │ 順位表用 URL  │
  │ Stages.json  │    │                                           │          └──────────────┘
- └──────────────┘    │  ⑤ローカル表示(:8766)  /  /state (JSON)    │
+ └──────────────┘    │  ⑤ローカル表示(:5705)  目次/4ページ + /state   │
                      └───────────────────────────────────────────┘
 ```
 
@@ -69,7 +70,7 @@ FPVTrackside で計測中のレース状況を、外部の表示システムへ�
 | ラップ送信 worker × `lap_senders`（既定 1） | 振り分けられたキューから POST。**同じ選手は常に同じ worker** なので周回順は保たれ、`2` 以上にすれば POST が遅くても他の選手を止めない |
 | 順位表送信 | 変化があったときだけ POST。失敗時は指数バックオフでリトライ |
 | Stages 監視 | 既定1秒間隔で mtime/size を確認し、落ち着いたところを読んでキューへ |
-| ローカル表示（`:8766`） | `/`（HTML）と `/state`（JSON）を配信 |
+| ローカル表示（`:5705`） | `/`（目次）・`/stat`・`/qualify`・`/standings`・`/live`（HTML）と `/state`（JSON）、`/shared.css`・`/shared.js` を配信 |
 
 ---
 
@@ -81,7 +82,7 @@ FPVTrackside で計測中のレース状況を、外部の表示システムへ�
 | OS | macOS / Windows（Linux も可） |
 | FPVTrackside | ExtensionMode（Gate / LED POST 通知）に対応した版。動作確認は 2.78.x |
 | ネットワーク | 受信は同一マシン（127.0.0.1）。**送信はインターネット必須**（Google へ HTTPS） |
-| 使用ポート | 既定 8765（受信）/ 8766（ローカル表示）。FPVTrackside 内蔵 Web サーバの 8080 は使わない |
+| 使用ポート | 既定 8765（受信）/ 5705（ローカル表示）。FPVTrackside 内蔵 Web サーバの 8080 は使わない |
 
 ---
 
@@ -134,14 +135,14 @@ python3 tools/fpvt2google.py --init
 ### 4.3 疎通確認（3ステップ）
 
 ```bash
-# 1) 送信先を仮の URL にしたまま dry-run で起動（POST しない）
-python3 tools/fpvt2google.py --dry-run
+# 1) 送信先を仮の URL にしたまま local-only で起動（POST しない）
+python3 tools/fpvt2google.py --local-only
 
 # 2) FPVTrackside を起動してレースを1本流す
-#    → ログに "Hello:" "RaceStart" "[dry-run lap] {...}" が出れば受信は成功
+#    → ログに "Hello:" "RaceStart" "[local-only lap] {...}" が出れば受信は成功
 
 # 3) ローカル表示をブラウザで開いて確認
-open http://localhost:8766/
+open http://localhost:5705/
 ```
 
 `Hello:` の行が出ない場合は §10 の「PUT が届かない」を参照。
@@ -153,7 +154,7 @@ open http://localhost:8766/
 ```bash
 python3 tools/fpvt2google.py                       # 通常起動（fpvt2google.json を読む）
 python3 tools/fpvt2google.py --config /path/cfg.json
-python3 tools/fpvt2google.py --dry-run             # POST せず内容をログに出す
+python3 tools/fpvt2google.py --local-only          # Google へ POST せずローカル表示だけ動かす
 python3 tools/fpvt2google.py --record cap.jsonl    # 受信した生イベントを録画
 python3 tools/fpvt2google.py --replay cap.jsonl    # 録画を再生（アプリ無しで動作確認）
 python3 tools/fpvt2google.py --lap-url https://... --standings-url https://...
@@ -179,8 +180,8 @@ python3 /絶対パス/tools/fpvt2google.py             # どのディレクト�
 2026-09-11 14:31:08 設定: /Users/…/FPVTracksideScripts/fpvt2google.json
 2026-09-11 14:31:08 channel_pos = {"E2": 1, "E1": 2, "F3": 3, "F5": 4}
 2026-09-11 14:31:09 receiver listening on 0.0.0.0:8765
-2026-09-11 14:31:09 dashboard listening on 0.0.0.0:8766
-2026-09-11 14:31:09 ローカル表示: http://localhost:8766/
+2026-09-11 14:31:09 dashboard listening on 0.0.0.0:5705
+2026-09-11 14:31:09 ローカル表示: http://localhost:5705/
 ```
 
 `google_lap_url` / `google_standings_url` が未設定の場合は起動時に警告を出し、
@@ -210,7 +211,9 @@ python3 /絶対パス/tools/fpvt2google.py             # どのディレクト�
 |---|---|---|
 | `listen_host` | `0.0.0.0` | 受信サーバのバインド先（FPVTrackside と同一マシンなら `127.0.0.1` でも可） |
 | `listen_port` | `8765` | `NotificationURL` に指定するポート |
-| `dashboard_port` | `8766` | ローカル表示ページのポート（`0` で無効） |
+| `dashboard_port` | `5705` | ローカル表示ページのポート（`0` で無効） |
+| `bar_scale` | `"sheet"` | 棒グラフの縦軸。`"sheet"` = `bar_rows` 段の固定（シートの `RaceStatus` 再現）、`"auto"` = ヒート内の最大周回を100%に合わせる |
+| `bar_rows` | `22` | `bar_scale: "sheet"` の段数（シートの1〜22行に対応） |
 
 ### 6.3 ラップの整形
 
@@ -258,7 +261,7 @@ FPVTrackside は `channel.band` に**長い名前**（`"Fatshark"` `"Raceband"` 
 
 | キー | 既定 | CLI | 意味 |
 |---|---|---|---|
-| `dry_run` | `false` | `--dry-run` | POST せず内容をログに出す（送信成功としてカウントする） |
+| `local_only` | `false` | `--local-only` | Google へ POST せずローカル表示だけ動かす（送信する内容はログに出し、送信成功としてカウントする）。**旧名の `dry_run` も読み替えて受け付ける**ので、既存の設定ファイルはそのまま動く |
 | `record` | `""` | `--record FILE` | 受信した**生イベント**を JSONL で追記保存 |
 | `replay` | `""` | `--replay FILE` | JSONL を再生して `handle_event` に流す（受信サーバも起動したまま） |
 | `replay_speed` | `1.0` | `--speed N` | 再生速度。`0` で待ち時間なし |
@@ -274,7 +277,7 @@ FPVTrackside は `channel.band` に**長い名前**（`"Fatshark"` `"Raceband"` 
 --listen-port N      --dashboard-port N
 --events-dir PATH    --event-id ID
 --channel-pos "E2=1,E1=2,F3=3,F5=4"
---batch-window SEC   --lap-senders N    --dry-run
+--batch-window SEC   --lap-senders N    --local-only
 --record FILE        --replay FILE        --speed N
 --log-file FILE
 ```
@@ -461,22 +464,57 @@ function doPost(e) {
 
 ---
 
-## 8. ローカル表示（`:8766`）
+## 8. ローカル表示（`:5705`）
 
 インターネットが不通でも状況を確認できるように、同じデータをローカルで表示する。
+**1つの URL に複数ページ**を持ち、`/` が目次になる。見た目は `/shared.css` と
+`/shared.js`（どちらも中継プログラム内の文字列を配信したもの）で共有する。
 
-| URL | 内容 |
-|---|---|
-| `http://localhost:8766/` | 表示ページ（1秒毎に `/state` を取得して再描画） |
-| `http://localhost:8766/state` | 状態の JSON（自作の表示ページからも使える） |
-| `http://localhost:8765/healthz` | 受信サーバの疎通確認（`fpvt2google receiver ok`） |
-| `http://localhost:8765/state` | 受信サーバ側でも同じ JSON を返す |
+| URL | 内容 | 更新間隔 |
+|---|---|---|
+| `http://localhost:5705/` | 目次（4ページへのリンク＋現在の状態の要約） | 1秒 |
+| `…/stat` | **レース・ステータス**（棒グラフ）。ヒート中の周回数・最終／ベストラップ・総飛行時間（Google シートの `RaceStatus` に相当） | 1秒 |
+| `…/qualify` | **予選順位表**。`Type=qualify` の最後の内容を凍結して保持（勝ち上がり戦に入っても変わらない） | 2秒 |
+| `…/standings` | **最新順位**。予選中は予選順位、勝ち上がり戦に入ると最新の結果を1ページで表示 | 2秒 |
+| `…/live` | 診断用。受信したラップの一覧・順位表の生の値・送信統計 | 1秒 |
+| `…/state` | 状態の JSON（自作の表示ページからも使える） | — |
+| `http://localhost:8765/healthz` | 受信サーバの疎通確認（`fpvt2google receiver ok`） | — |
+| `http://localhost:8765/state` | 受信サーバ側でも同じ JSON を返す | — |
 
-表示内容: ヒート情報（Round/Race・経過時間）、ラップ表（Pos / Pilot / Ch / Lap / Lap Time / Total、
-`finished` は ★）、順位表（`Type` バッジ＋行番号付き）、送信統計。
-
-`listen_host` が `0.0.0.0` なので、**同じ LAN の他端末からも** `http://<Mac の IP>:8766/` で見られる
+`listen_host` が `0.0.0.0` なので、**同じ LAN の他端末からも** `http://<Mac の IP>:5705/` で見られる
 （プロジェクタや観客用モニタに使える）。
+
+### 8.1 レース・ステータス（`/stat`）
+
+Google シートの `RaceStatus`（`GAS/raceStat.gs`）と同じ見せ方を再現する。
+
+- `channel_pos` の **pos 毎に1列**。列の色はシートと同じ（pos1 赤 / pos2 緑 / pos3 青 /
+  pos4 黄、5 以降は紫・水色を繰り返す）。`pos` が引けなかった選手は後ろに追加の列として
+  出すので、`channel_pos` の設定ミスが隠れない
+- 棒は**下から伸びる**。`bar_scale: "sheet"`（既定）は `bar_rows`（既定 22）段の固定スケールで、
+  シートの1〜22行に対応する。`"auto"` にするとヒート内の最大周回を100%に合わせる
+- 棒のいちばん上のマスに周回数を書く（シートと同じ）。`holeshot`（lap 0）は周回に数えず
+  `HS` と出す
+- 棒の下に**最終ラップ・ベスト・総飛行時間**と**選手名＋チャンネル**（`finished` は ★）
+- `RaceStart` で全列をクリアする（シートと同じ）
+
+ベストは中継側で畳み込む（`best_lap()`）。`board` は最新1件しか持たないので、
+ラップが届くたびにヒート内の最小値を更新している。
+
+### 8.2 予選順位表（`/qualify`）と最新順位（`/standings`）
+
+- `/standings` は `Stages.json` の最新スナップショットをそのまま出す（`Type` バッジ付き）。
+  予選中は予選順位、勝ち上がり戦に入ると勝ち上がり・決勝の順位に**自動で切り替わる**
+- `/qualify` は `Type=qualify` の**最後の**スナップショットをメモリに凍結して出す
+  （シートの「予選順位表」に相当）。勝ち上がり戦の内容では上書きされない。
+  メモリだけなので**中継を再起動すると消える**（再起動後は `Stages.json` が既に
+  勝ち上がり戦の内容になっているため復元できない）
+- Status 列はシート（`GAS/raceResult.gs` の `trans()`）と同じ日本語に読み替えて出す
+  （`cut`→順位確定(予選)、`out`→順位確定(勝ち上がり戦)、`advances`→上位へ勝ち上がり、
+  `enters`→勝ち上がり戦、`finalist`→決勝戦進出、`final`→決勝戦）。
+  読み替えは**表示だけ**で、`/state` の JSON と `/live` は生の値のまま。
+  生の値はセルの `title` 属性に残す
+- 順位表の更新が120秒以上止まっていると `/standings` に警告を出す
 
 ### `/state` の JSON スキーマ
 
@@ -488,19 +526,30 @@ function doPost(e) {
            "startedAt": "2026-09-11T10:00:05.000Z", "startedMono": 1789104611.3, "elapsed": 8.4},
   "laps": [{"timestamp":"2026-09-12 10:00:33","type":"DetectionExt","pos":1,"channel":"F3",
             "pilot":"Shu_FPV","lap":3,"holeshot":false,"total":28.0,"laptime":8.3,
-            "round":3,"race":5,"position":1,"finished":false,"updatedAt":1789104619.1}],
-  "standings": {"type":"final","headings":["Laps","Time","Status"],
+            "bestlap":7.9,"round":3,"race":5,"position":1,"finished":false,
+            "updatedAt":1789104619.1}],
+  "standings": {"type":"final","name":"Ladder Finals 勝ち上がり戦","timestamp":"2026-09-12 10:01:02",
+                "headings":["Laps","Time","Status"],
                 "rows":[["ゆっきーFPV","1","8.644","final bye"]],
                 "source":"/…/Stages.json","updatedAt":1789104612.0},
+  "qualify": {"type":"qualify","name":"Qualifying 予選","timestamp":"2026-09-12 09:40:11",
+              "headings":["Laps","Time"],
+              "rows":[["ゆっきーFPV","10","101.000"]],
+              "source":"/…/Stages.json","updatedAt":1789103211.0},
   "stats": {"recv":27,"lap_sent":5,"lap_failed":0,"standings_sent":1,
             "standings_failed":0,"sector_skipped":12,"invalid_skipped":0,"dup_skipped":0},
   "config": {"channel_pos":{"E2":1,"E1":2,"F3":3,"F5":4},
+             "bar_scale":"sheet","bar_rows":22,"decimal_places":2,
              "google_lap_url":true,"google_standings_url":true}
 }
 ```
 
-- `laps` は `RaceStart` でクリアされ、`pos` 順（未設定は最後、同 pos は周回数降順）に並ぶ
-- `config.google_*` は **URL が設定されているか**の真偽値（URL 自体は出さない）
+- `laps` は `RaceStart` でクリアされ、`pos` 順（未設定は最後、同 pos は周回数降順）に並ぶ。
+  `bestlap` はヒート内の最小ラップタイム（holeshot は数えない）
+- `standings` は `Stages.json` の最新、`qualify` は `Type=qualify` の最後のスナップショット
+  （§8.2）。`name` はステージ名、`timestamp` は取得時刻（`yyyy-mm-dd hh:mm:ss`）
+- `config.google_*` は **URL が設定されているか**の真偽値（URL 自体は出さない）。
+  `bar_scale` / `bar_rows` / `decimal_places` は棒グラフの描画用（§6.2 / §8.1）
 - `stats` の意味: `recv`=受信イベント総数、`lap_sent`/`standings_sent`=送信成功、
   `*_failed`=送信失敗、`sector_skipped`=セクタ通過、`invalid_skipped`=無効検出、
   `dup_skipped`=重複
@@ -518,14 +567,15 @@ function doPost(e) {
 4. ログに `receiver listening on 0.0.0.0:8765` / `dashboard listening` が出たか
 5. FPVTrackside を起動 → ログに **`Hello: fpvt … / events=…`** が出るか
    （出なければ ExtensionMode が効いていない）
-6. `http://localhost:8766/` が開くか
+6. `http://localhost:5705/` が開くか（目次から `/stat` のレース・ステータスと `/standings` が見えること）
 7. テストレースを1本 → `RaceStart` と `DetectionExt` のログ、`[lap]` の送信成功が出るか
 8. 順位表: `Stages.json changed → Type=qualify` が出るか
 
 ### 9.2 イベント中
 
 - 基本は放置でよい。見るのは以下
-  - ローカル表示 `:8766` のラップ表と順位表
+  - ローカル表示 `:5705` の `/stat`（レース・ステータス）と `/standings`（最新順位）。
+    予選の結果は `/qualify` に残る
   - ログの `lap POST failed` / `standings POST failed`（ネット断・クォータ超過の兆候）
 - **チャンネル割当が予定と違う**ときは、`--channel-pos "E2=1,E1=2,F3=3,F5=4"` を付けて
   再起動すればよい（`pos` は表示位置なので、分からなければ `null` のまま `channel` と
@@ -545,12 +595,12 @@ function doPost(e) {
 | 症状 | 原因 | 対処 |
 |---|---|---|
 | `Hello:` が出ない | ExtensionMode 未設定／**再起動していない**／URL・ポート違い | プロファイル設定を確認して再起動。`curl http://127.0.0.1:8765/healthz` で受信側の生存確認 |
-| `Hello` は出るが `DetectionExt` が出ない | レースが流れていない／`isLapEnd` が無い（セクタのみ） | `--dry-run` で `sector_skipped` が増えていないか見る。増えていれば検出は届いている（lap-end が無い＝タイミング設定を確認） |
+| `Hello` は出るが `DetectionExt` が出ない | レースが流れていない／`isLapEnd` が無い（セクタのみ） | `--local-only` で `sector_skipped` が増えていないか見る。増えていれば検出は届いている（lap-end が無い＝タイミング設定を確認） |
 | `pos` が `null` | `channel_pos` にそのチャンネルが無い | 送信 JSON／ローカル表示の `"channel"` の値（例 `"F3"`）を見て `channel_pos` に追加。band 名の読み替えは §6.3 の表（`Fatshark`→`F` など）を内蔵しているので、**設定には短縮名で書けばよい** |
 | `channel` が `Fatshark3` のまま | 古い版を使っている | band 名の短縮は 2026-09-12 以降の版で内蔵。表に無い band は `band_short` で追加できる |
 | `lap` が 0 になる | holeshot 通過（スタート直後の1回目） | 正常。`holeshot: true` が付く。ローカル表示では `HS` と出す |
 | `lap` が1少ない／多い | 受信側での補正 | 本プログラムは `lapNumber` を**そのまま**送る（実データで 1 始まりを確認済み）。表示側で ±1 しないこと |
-| ラップがまったく届かない（Google 側） | URL 誤り／デプロイのアクセス権／クォータ | ログの `lap POST failed (… tries): HTTPError …` を確認。`--dry-run` で本文を目視 |
+| ラップがまったく届かない（Google 側） | URL 誤り／デプロイのアクセス権／クォータ | ログの `lap POST failed (… tries): HTTPError …` を確認。`--local-only` で本文を目視 |
 | Google 側で `lapNumber` が飛ぶ（例 1,2,4,6） | 旧版の間引きが `(round,race,pos)` 単位で、POST が遅れて溜まると同一選手の別周回を消していた | 2026-09-15 以降の版へ更新（間引き単位に `lap` を追加）。遅延が大きいなら `lap_senders` を増やす |
 | ラップは届くが Google 側の反映が遅い | Apps Script の1実行が遅い（シート書込を同期でしている等） | `lap_senders` を増やす。Google 側は「即 return して別 doGet で表示」にする（§9） |
 | `lap_senders` を上げたら POST がほとんど成功しなくなった | Apps Script が並行実行をさばけていない（`LockService` 待ち・429・実行時間超過） | `lap_senders` を `1`（直列）に戻す。ログの `lap POST failed (…) : HTTPError 429` などで原因を特定 |
@@ -559,7 +609,7 @@ function doPost(e) {
 | 別のステージの順位表が送られる | 複数ステージがある | `script_format` を実際のスクリプト名に合わせる |
 | `Type` が always `qualify` | 予選中（正常）または Lua の列構成が変わった | §7.2 の判定規則を確認 |
 | 同じ順位表が何度も送られる | アプリの書込が複数回に分かれている | デバウンス済み（2回連続一致）。それでも多いなら `stages_poll_sec` を上げる |
-| 起動時に `起動失敗: ポートを使えません` | 8765/8766 が使用中 | `--listen-port` / `--dashboard-port` を変える。FPVTrackside 内蔵 Web サーバは 8080 なので通常は衝突しない |
+| 起動時に `起動失敗: ポートを使えません` | 8765/5705 が使用中 | `--listen-port` / `--dashboard-port` を変える。FPVTrackside 内蔵 Web サーバは 8080 なので通常は衝突しない |
 | Windows で他マシンから見えない | ファイアウォール | Python の受信許可、または表示だけなら送信側マシンで開く |
 | 日本語が文字化け | 受信側のエンコーディング | 送信は UTF-8（`ensure_ascii=False`）。Google 側で `JSON.parse(e.postData.contents)` を使う |
 
@@ -570,24 +620,27 @@ function doPost(e) {
 ### 11.1 テスト
 
 ```bash
-python3 test/fpvt2google_test.py       # 36件（unittest）
+python3 test/fpvt2google_test.py       # 46件（unittest）
 ```
 
 偽の Google エンドポイント（ローカル HTTP サーバ）と偽のイベントフォルダを使い、
 次を検証している: 受信→整形→間引き→送信／`pos` 変換／`Holeshot` の周回数／
 セクタ・無効・重複の除外／周回数（1始まり・holeshot=0）／**同じ選手の別周回を間引かないこと**／
 **応答が遅い Google でもラップが欠落せず周回順を保つこと**（直列／並列の両方）／`RaceStart` の即時送出／Stages.json 監視と `Type` 判定／
-ステージ選択／302 リダイレクトの再 POST／500 時のリトライ／dry-run／record・replay／
-設定の読込と探索順（実行ディレクトリ優先・`--config` の不在はエラー・`--init` の出力先）。
+ステージ選択／302 リダイレクトの再 POST／500 時のリトライ／local-only／record・replay／
+設定の読込と探索順（実行ディレクトリ優先・`--config` の不在はエラー・`--init` の出力先）／
+**ローカル表示の全ページと `/shared.css`・`/shared.js`・`/state` の配信**／
+**ベストラップの畳み込み（holeshot は数えない）**／`RaceStart` での board クリア／
+**予選順位表が勝ち上がり戦で上書きされないこと**／順位表スナップショットのステージ名と時刻。
 
 Lua 側のテスト（`test/ladder_finals_test.lua` 等）も合わせて実行すること。
 
 ### 11.2 録画と再生
 
 ```bash
-python3 tools/fpvt2google.py --record cap.jsonl --dry-run   # 実機イベントを録画
-python3 tools/fpvt2google.py --replay cap.jsonl --speed 0   # 再生（待ち時間なし）
-python3 tools/fpvt2google.py --replay cap.jsonl --speed 1   # 実時間どおりに再生
+python3 tools/fpvt2google.py --record cap.jsonl --local-only   # 実機イベントを録画
+python3 tools/fpvt2google.py --replay cap.jsonl --speed 0      # 再生（待ち時間なし）
+python3 tools/fpvt2google.py --replay cap.jsonl --speed 1      # 実時間どおりに再生
 ```
 
 - 録画されるのは**受信した生イベント**（フィルタ前）。`Hello` も含むので、
@@ -601,6 +654,8 @@ python3 tools/fpvt2google.py --replay cap.jsonl --speed 1   # 実時間どおり
 | 既定値 | `DEFAULT_CONFIG` |
 | イベント整形 | `shape_race_start()` / `shape_detection()` / `channel_key()` |
 | 順位表の整形 | `pick_stage()` / `classify_standings()` / `build_standings_payload()` |
+| ローカル表示の状態 | `best_lap()`（`_on_detection` で畳み込む）/ `_push_stages`（`standings` と凍結した `qualify`）/ `snapshot()` |
+| ローカル表示のページ | `SHARED_CSS` / `SHARED_JS` / `page()` / `INDEX_HTML`・`STAT_HTML`・`QUALIFY_HTML`・`STANDINGS_HTML`・`LIVE_HTML` / `PAGES`・`ASSETS` |
 | 中継本体 | `Relay`（`handle_event` / `_on_detection` / `_stages_watcher` / `_lap_sender`（窓＋配信）/ `_lap_worker`（並列 POST）/ `_standings_sender` / `snapshot`） |
 | 間引き・振り分けのキー | `_lap_key()`（`round`+`race`+`pos`+**`lap`**）/ `_pilot_key()`（選手単位＝worker の振り分け先） |
 | HTTP | `_ReceiverHandler`（PUT 受信）/ `_DashboardHandler`（表示）/ `_RepostRedirect`（302 再 POST）/ `post_json()` |
@@ -619,7 +674,7 @@ python3 tools/fpvt2google.py --replay cap.jsonl --speed 1   # 実時間どおり
 2. **選手の識別は名前**（`pilotName`）。`DetectionExt` にパイロットIDは含まれない。
    同名選手がいる場合は区別できない
 3. **Google 側の反映は秒単位**（受信→Apps Script 実行→表示で概ね2〜6秒）。
-   サブ秒のライブ表示には向かない。必要なら `:8766` のローカル表示を使う
+   サブ秒のライブ表示には向かない。必要なら `:5705` のローカル表示を使う
 4. **インターネット必須**。会場の電波が切れると Google への送信は失敗する
    （ローカル表示は動き続ける）
 5. **順位表の鮮度はアプリの書込次第**。`Stages.json` はレースの区切りで更新されるため、

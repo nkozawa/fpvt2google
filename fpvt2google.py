@@ -7,14 +7,16 @@
      RaceStart と DetectionExt（ラップ確定のみ）を整形して lap 用 URL へ POST する
   2. イベントフォルダの Stages.json を監視し、変化したら順位表を standings 用 URL へ POST する
      （Stages.json の Standings は Lua スクリプト standings() の出力そのもの）
-  3. 同じ内容をローカルの Web ページにも表示する（インターネット不通時のフォールバック）
+  3. 同じ内容をローカルの Web ページにも表示する（インターネット不通時のフォールバック）。
+     既定 :5705 で `/`（目次）`/stat`（レース・ステータス）`/qualify`（予選順位表）
+     `/standings`（最新順位）`/live`（診断）を出す。仕様は fpvt2google.md §8
 
 Python 3.8 以降・標準ライブラリのみ。macOS / Windows 共通。
 
 使い方
   python3 fpvt2google.py --init                # 設定ファイルの雛形を作る
   python3 fpvt2google.py                       # 起動（fpvt2google.json を読む）
-  python3 fpvt2google.py --dry-run             # 送信せずに内容をログへ
+  python3 fpvt2google.py --local-only          # Google へ POST せずローカル表示だけ動かす
   python3 fpvt2google.py --record cap.jsonl    # 受信した生イベントを録画
   python3 fpvt2google.py --replay cap.jsonl    # 録画を再生（Google 無しで開発）
 
@@ -48,7 +50,7 @@ DEFAULT_CONFIG = {
     "google_lap_url": "",
     "google_standings_url": "",
     # --- 表示用のローカルページ（0 で無効） ---
-    "dashboard_port": 8766,
+    "dashboard_port": 5705,
     # --- チャンネル → 表示位置（pos）。キーは短縮名(F3)/生のband名(Fatshark3)/周波数 ---
     "channel_pos": {"E2": 1, "E1": 2, "F3": 3, "F5": 4},
     "band_short": {},              # band 名の読み替えを追加する場合（既定は BAND_SHORT）
@@ -71,11 +73,15 @@ DEFAULT_CONFIG = {
     "standings_retries": 5,
     # --- 表示 ---
     "decimal_places": 2,           # Hello.decimalPlaces が届けばそれで上書き
+    # レース・ステータス（/stat）の棒グラフの縦軸:
+    #   sheet = シートの RaceStatus 再現（bar_rows 段の固定）/ auto = 最大周回に合わせる
+    "bar_scale": "sheet",
+    "bar_rows": 22,                # sheet の段数（シートの 1〜22 行に対応）
     # --- 開発用 ---
     "record": "",
     "replay": "",
     "replay_speed": 1.0,
-    "dry_run": False,
+    "local_only": False,           # Google へ POST せずローカル表示だけ動かす（内容はログへ）
     "log_file": "",
 }
 
@@ -190,6 +196,15 @@ def _round(value, decimals):
         return round(float(value), decimals)
     except (TypeError, ValueError):
         return None
+
+
+def best_lap(previous, laptime, lap):
+    """ヒート内のベスト lap を更新する。lap 0（holeshot 通過）は周回では無いので数えない"""
+    if not lap or laptime is None:
+        return previous
+    if previous is None:
+        return laptime
+    return min(previous, laptime)
 
 
 def shape_race_start(ev):
@@ -332,6 +347,7 @@ class Relay:
         self.heat = {}
         self.board = OrderedDict()      # key -> 最新のラップ状態
         self.standings = {}             # ローカル表示用の最新順位表
+        self.qualify = {}               # 予選順位表（Type=qualify の最後の内容を凍結して保持）
         self.stats = {"recv": 0, "lap_sent": 0, "lap_failed": 0,
                       "standings_sent": 0, "standings_failed": 0,
                       "sector_skipped": 0, "invalid_skipped": 0, "dup_skipped": 0}
@@ -452,7 +468,12 @@ class Relay:
         key = (payload["round"], payload["race"],
                payload["pos"] if payload["pos"] is not None else payload["pilot"])
         with self.lock:
-            self.board[key] = dict(payload, updatedAt=time.time())
+            previous = self.board.get(key)
+            entry = dict(payload, updatedAt=time.time())
+            # レース・ステータス用。board は最新1件しか持たないのでベストはここで畳み込む
+            entry["bestlap"] = best_lap(previous.get("bestlap") if previous else None,
+                                        entry["laptime"], entry["lap"])
+            self.board[key] = entry
         self.lap_q.put(payload)
 
     def decimals(self):
@@ -528,15 +549,23 @@ class Relay:
         if payload is None:
             return True                                   # 順位表はまだ無い
         with self.lock:
-            card = (pick_stage(stages, self.cfg["script_format"]) or {}).get("Standings") or {}
-            self.standings = {
+            stage = pick_stage(stages, self.cfg["script_format"]) or {}
+            card = stage.get("Standings") or {}
+            snapshot = {
                 "type": payload.get("Type"),
+                "name": stage.get("Name"),
+                "timestamp": payload.get("timestamp"),
                 "headings": card.get("Headings") or [],
                 "rows": [[r.get("Name")] + list(r.get("Values") or [])
                          for r in (card.get("Rows") or [])],
                 "source": str(path),
                 "updatedAt": time.time(),
             }
+            self.standings = snapshot
+            # 予選順位表はここで凍結する。勝ち上がり戦に入ると Stages.json は
+            # 最新の結果しか持たないので、予選の内容はここからしか復元できない
+            if snapshot["type"] == "qualify":
+                self.qualify = dict(snapshot)
         while True:                                        # 最新だけ残す
             try:
                 self.standing_q.get_nowait()
@@ -551,8 +580,8 @@ class Relay:
         if not url:
             return False
         opener = opener or self.opener
-        if self.cfg["dry_run"]:
-            self.log("[dry-run %s] %s" % (label, json.dumps(payload, ensure_ascii=False)))
+        if self.cfg["local_only"]:
+            self.log("[local-only %s] %s" % (label, json.dumps(payload, ensure_ascii=False)))
             with self.lock:
                 self.stats[label + "_sent"] += 1
             return True
@@ -673,6 +702,7 @@ class Relay:
             heat = dict(self.heat)
             board = [dict(v) for v in self.board.values()]
             standings = dict(self.standings)
+            qualify = dict(self.qualify)
             stats = dict(self.stats)
             hello = {"fpvtVersion": self.hello.get("fpvtVersion"),
                      "platform": self.hello.get("platform"),
@@ -682,8 +712,11 @@ class Relay:
         if heat.get("startedMono"):
             heat["elapsed"] = round(time.time() - heat["startedMono"], 1)
         return {"now": time.time(), "hello": hello, "heat": heat, "laps": board,
-                "standings": standings, "stats": stats,
+                "standings": standings, "qualify": qualify, "stats": stats,
                 "config": {"channel_pos": self.cfg["channel_pos"],
+                           "bar_scale": self.cfg["bar_scale"],
+                           "bar_rows": self.cfg["bar_rows"],
+                           "decimal_places": self.decimals(),
                            "google_lap_url": bool(self.cfg["google_lap_url"]),
                            "google_standings_url": bool(self.cfg["google_standings_url"])}}
 
@@ -737,6 +770,7 @@ class _Base(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")   # ページの差し替え・状態を確実に反映
         self.end_headers()
         if body:
             self.wfile.write(body)
@@ -775,72 +809,386 @@ class _ReceiverHandler(_Base):
 
 
 class _DashboardHandler(_Base):
-    """ネットが不通でも状況を確かめられるローカル表示"""
+    """ネットが不通でも状況を確かめられるローカル表示（1つの URL に複数ページ）
+
+    `/` が目次で、配下に レース・ステータス `/stat`、予選順位表 `/qualify`、
+    最新順位 `/standings`、診断用 `/live` を出す。見た目は `/shared.css` と
+    `/shared.js`（どちらもこのファイル内の文字列）で共有する。
+    """
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            self._respond(200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path == "/state":
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path in PAGES:
+            self._respond(200, PAGES[path].encode("utf-8"), "text/html; charset=utf-8")
+        elif path in ASSETS:
+            ctype, body = ASSETS[path]
+            self._respond(200, body.encode("utf-8"), ctype)
+        elif path == "/state":
             self._respond(200, json.dumps(self.relay.snapshot(), ensure_ascii=False).encode("utf-8"),
                           "application/json; charset=utf-8")
         else:
             self._respond(404, b"not found\n")
 
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+# --------------------------------------------------------------------------- #
+# ローカル表示のページ（Google シートの RaceStatus / 予選順位表 / 順位表 に相当）
+# --------------------------------------------------------------------------- #
+SHARED_CSS = """
+:root{--bg:#0e1116;--fg:#eef2f7;--muted:#94a1b5;--line:#2a3240;--accent:#4aa3ff;--panel:#151a22}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);padding:12px 16px 28px;
+     font:16px/1.5 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:16px;margin:20px 0 6px;color:var(--accent)}
+a{color:var(--accent)}
+table{border-collapse:collapse;width:100%;max-width:1000px}
+th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:13px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.meta{color:var(--muted);font-size:13px}
+.big{font-size:26px;font-weight:700}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;background:#24344d;
+       font-size:13px;vertical-align:middle}
+.badge.qualify{background:#1d4030}
+.badge.final{background:#4a2136}
+.stale{color:#f80}
+.empty{color:var(--muted);padding:24px 0}
+nav.top{font-size:14px;margin:0 0 12px}
+nav.top a{margin-right:14px;text-decoration:none}
+nav.top a.here{color:var(--fg);font-weight:700;border-bottom:2px solid var(--accent)}
+.cards{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.cards a{flex:1 1 240px;max-width:360px;padding:18px;border:1px solid var(--line);
+         border-radius:12px;background:var(--panel);text-decoration:none;color:var(--fg)}
+.cards a:hover{border-color:var(--accent)}
+.cards b{display:block;font-size:20px;margin-bottom:6px}
+.cards span{color:var(--muted);font-size:13px;line-height:1.5}
+.cols{display:flex;gap:10px;align-items:flex-start;margin-top:12px;overflow-x:auto}
+.col{flex:1 1 0;min-width:130px}
+.col h3{margin:0 0 6px;font-size:14px;text-align:center;color:var(--muted);font-weight:600}
+.bar{position:relative;height:56vh;min-height:220px;background:#1b2230;
+     border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.bar.fixed{display:grid;grid-template-rows:repeat(var(--rows,22),1fr);gap:1px}
+.bar .cell{background:#202836}
+.bar .cell.on{background:var(--c,#4aa3ff);color:var(--cf,#fff)}
+.bar .cell.on span{display:flex;align-items:center;justify-content:center;height:100%;
+                   font-weight:700;font-size:13px}
+.bar.auto .fill{position:absolute;left:0;right:0;bottom:0;background:var(--c,#4aa3ff);
+                transition:height .3s ease-out}
+.facts{margin-top:8px;display:grid;gap:2px}
+.facts div{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.facts .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.facts .k{color:var(--muted);font-size:11px}
+.pilot{margin-top:8px;text-align:center;font-size:17px;font-weight:700;
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pilot small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.pilot.done{color:#ffd54f}
+"""
+
+SHARED_JS = """
+const $ = id => document.getElementById(id);
+let DEC = 2;
+// 色はシートの RaceStatus に合わせる（pos1 赤 / pos2 緑 / pos3 青 / pos4 黄）
+const PALETTE = [['#e53935','#fff'],['#2e7d32','#fff'],['#1565c0','#fff'],
+                 ['#fdd835','#111'],['#6a1b9a','#fff'],['#00838f','#fff']];
+const NAV = [['/','目次'],['/stat','レース・ステータス'],['/qualify','予選順位表'],
+             ['/standings','最新順位'],['/live','ライブ']];
+
+function buildNav(){
+  const nav = document.getElementById('nav');
+  if(!nav) return;
+  let p = location.pathname;
+  if(p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  if(p === '/index.html') p = '/';
+  nav.innerHTML = NAV.map(function(x){
+    return '<a href="'+x[0]+'"'+(x[0]===p?' class="here"':'')+'>'+x[1]+'</a>';
+  }).join('');
+}
+buildNav();
+
+function esc(v){
+  return String(v==null?'':v).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function fmt(v){
+  if(v==null || v==='') return '-';
+  return typeof v==='number' ? v.toFixed(DEC) : v;
+}
+function ago(unix){ return unix ? Math.max(0, Math.round(Date.now()/1000 - unix)) : null; }
+
+async function getState(){
+  const r = await fetch('state', {cache:'no-store'});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+function poll(render, ms){
+  ms = ms || 1000;
+  (async function tick(){
+    try{
+      const s = await getState();
+      DEC = (s.config && s.config.decimal_places) || 2;
+      render(s);
+      const e = $('err'); if(e){ e.className='meta'; e.textContent=''; }
+    }catch(err){
+      const e = $('err');
+      if(e){ e.className='meta stale'; e.textContent='state 取得失敗: '+err; }
+    }
+    setTimeout(tick, ms);
+  })();
+}
+function heatLine(h){
+  if(!h || h.round==null) return 'レース待機';
+  return 'Round '+h.round+' / Race '+h.race+
+         (h.elapsed!=null?'　経過 '+Math.floor(h.elapsed)+'s':'');
+}
+// シートの trans() と同じ読み替え。表示だけで、/state の JSON は生の値のまま
+function transStatus(text){
+  if(text==null || text==='') return '';
+  return String(text)
+    .replace('cut','順位確定(予選)')
+    .replace('out','順位確定(勝ち上がり戦)')
+    .replace('advances','上位へ勝ち上がり')
+    .replace('enters','勝ち上がり戦')
+    .replace('finalist','決勝戦進出')
+    .replace('final','決勝戦');
+}
+function standingsTable(st, translate){
+  if(!st || !st.rows || !st.rows.length) return '<div class="empty">データなし</div>';
+  const heads = (st.headings && st.headings.length) ? st.headings : [];
+  let statusIdx = -1;
+  heads.forEach(function(h,i){ if(/^status$/i.test(String(h))) statusIdx = i; });
+  let html = '<table><thead><tr><th class="num">#</th><th>選手</th>'+
+    heads.map(function(h){ return '<th>'+esc(h)+'</th>'; }).join('')+'</tr></thead><tbody>';
+  st.rows.forEach(function(row,i){
+    html += '<tr><td class="num">'+(i+1)+'</td><td>'+esc(row[0])+'</td>'+
+      row.slice(1).map(function(cell,j){
+        const isStatus = translate && j === statusIdx;
+        const text = isStatus ? (transStatus(cell) || ' ') : cell;
+        return '<td'+(isStatus?' title="'+esc(cell)+'"':'')+'>'+esc(text)+'</td>';
+      }).join('')+'</tr>';
+  });
+  return html+'</tbody></table>';
+}
+"""
+
+_PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FPVTrackside Live</title>
-<style>
- body{background:#111;color:#eee;font:16px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:12px}
- h1{font-size:18px;margin:0 0 4px} h2{font-size:15px;margin:18px 0 6px;color:#9ad}
- table{border-collapse:collapse;width:100%;max-width:900px}
- th,td{border-bottom:1px solid #333;padding:6px 8px;text-align:left;white-space:nowrap}
- th{color:#889;font-weight:600;font-size:13px}
- td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
- .big{font-size:26px;font-weight:700}
- .meta{color:#889;font-size:13px}
- .badge{display:inline-block;padding:1px 8px;border-radius:10px;background:#245;font-size:12px}
- .stale{color:#f80}
-</style></head><body>
-<h1>FPVTrackside Live <span class="badge" id="type">-</span></h1>
+<title>@@TITLE@@</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/shared.css">
+</head><body>
+<nav class="top" id="nav"></nav>
+@@BODY@@
+<div class="meta" id="err"></div>
+<script src="/shared.js"></script>
+<script>
+@@SCRIPT@@
+</script>
+</body></html>
+"""
+
+
+def page(title, body, script):
+    """共通の骨組み（nav・shared.css/js・エラー欄）に本文とスクリプトを埋め込む"""
+    return (_PAGE.replace("@@TITLE@@", title)
+                 .replace("@@BODY@@", body)
+                 .replace("@@SCRIPT@@", script))
+
+
+INDEX_HTML = page("FPVTrackside ローカル表示", """
+<h1>FPVTrackside ローカル表示</h1>
+<div class="meta" id="now">-</div>
+<div class="cards">
+ <a href="/stat"><b>レース・ステータス</b><span>ヒート中の周回数・最終／ベストラップ・総飛行時間。Google シートの RaceStatus に相当</span></a>
+ <a href="/qualify"><b>予選順位表</b><span>予選終了時の順位をそのまま保持。勝ち上がり戦に入っても内容は変わらない</span></a>
+ <a href="/standings"><b>最新順位</b><span>予選中は予選順位、勝ち上がり戦に入ると最新の結果を1ページで表示</span></a>
+ <a href="/live"><b>ライブ（診断）</b><span>受信したラップの一覧・順位表の生の値・送信統計。トラブル確認用</span></a>
+</div>
+<div class="meta" id="foot">-</div>
+""", """
+poll(function(s){
+  const st = s.standings||{}, q = s.qualify||{}, stats = s.stats||{};
+  $('now').textContent = heatLine(s.heat);
+  $('foot').textContent = '最新順位: '+(st.type||'なし')+(st.name?'（'+st.name+'）':'')+
+    '　/　予選順位表: '+(q.rows?'保持中':'なし')+
+    '　/　受信 '+stats.recv+' 件・ラップ送信 '+stats.lap_sent+' 件'+
+    ((stats.lap_failed||stats.standings_failed)
+      ? '　/　失敗 ラップ '+stats.lap_failed+'・順位表 '+stats.standings_failed : '');
+});
+""")
+
+STAT_HTML = page("レース・ステータス — FPVTrackside", """
+<h1>レース・ステータス <span class="badge" id="mode">-</span></h1>
+<div class="meta" id="heat">-</div>
+<div class="cols" id="cols"></div>
+<div class="meta" id="foot">-</div>
+""", """
+function posColor(pos){
+  if(pos==null) return '--c:#6b7684;--cf:#fff';
+  const p = PALETTE[(Math.abs(pos)-1) % PALETTE.length];
+  return '--c:'+p[0]+';--cf:'+p[1];
+}
+function posChannels(channelPos){
+  const map = {};
+  Object.keys(channelPos||{}).forEach(function(ch){
+    const p = channelPos[ch];
+    if(p==null) return;
+    map[p] = map[p] ? map[p]+'/'+ch : ch;
+  });
+  return map;
+}
+// channel_pos の pos 毎に1列（データにしか無い pos も列にする）。
+// pos が引けなかった選手は後ろに並べるので、設定ミスが隠れない
+function columns(channelPos, laps){
+  const byPos = {};
+  Object.keys(channelPos||{}).forEach(function(ch){
+    const p = channelPos[ch];
+    if(p!=null && byPos[p]===undefined) byPos[p] = null;
+  });
+  const extra = [];
+  laps.forEach(function(r){
+    if(r.pos!=null) byPos[r.pos] = r; else extra.push(r);
+  });
+  const cols = Object.keys(byPos).map(Number).sort(function(a,b){ return a-b; })
+                 .map(function(p){ return {pos:p, row:byPos[p]}; });
+  extra.forEach(function(r){ cols.push({pos:null, row:r}); });
+  return cols;
+}
+function columnHtml(c, rows, auto, maxLap, chans){
+  const r = c.row, pos = c.pos, style = posColor(pos);
+  const laps = r ? (r.lap||0) : 0;
+  let bar;
+  if(auto){
+    const pct = (laps>0 && maxLap>0) ? Math.max(3, Math.round(laps/maxLap*100)) : 0;
+    bar = '<div class="bar auto" style="'+style+'">'+
+          '<div class="fill" style="height:'+pct+'%"></div></div>';
+  }else{
+    const filled = Math.min(laps, rows);
+    let cells = '';
+    for(let i=rows; i>=1; i--){
+      cells += '<div class="cell'+(i<=filled?' on':'')+'">'+
+               (i===filled && filled>0 ? '<span>'+laps+'</span>' : '')+'</div>';
+    }
+    bar = '<div class="bar fixed" style="--rows:'+rows+';'+style+'">'+cells+'</div>';
+  }
+  const hasLap = r && r.lap>0;
+  const facts = [['周回', r ? (hasLap ? laps : (r.holeshot ? 'HS' : 0)) : '-'],
+                 ['最終', hasLap ? fmt(r.laptime) : '-'],
+                 ['ベスト', hasLap ? fmt(r.bestlap) : '-'],
+                 ['総合(s)', r ? fmt(r.total) : '-']];
+  return '<div class="col"><h3>'+(pos==null?'?':'pos '+pos)+'</h3>'+bar+
+    '<div class="facts">'+facts.map(function(f){
+      return '<div><span class="v">'+f[1]+'</span><span class="k">'+f[0]+'</span></div>';
+    }).join('')+'</div>'+
+    '<div class="pilot'+(r&&r.finished?' done':'')+'">'+(r?esc(r.pilot):'—')+
+      '<small>'+(r?esc(r.channel||'')+(r.finished?' ★':''):esc(chans[pos]||''))+'</small>'+
+    '</div></div>';
+}
+poll(function(s){
+  const cfg = s.config||{};
+  const rows = Math.max(1, cfg.bar_rows||22);
+  const auto = cfg.bar_scale === 'auto';
+  $('mode').textContent = auto ? 'auto（最大周回に合わせる）' : 'シート '+rows+'段';
+  $('heat').textContent = heatLine(s.heat);
+  const laps = s.laps||[];
+  const maxLap = laps.reduce(function(m,r){ return Math.max(m, r.lap||0); }, 0);
+  const cols = columns(cfg.channel_pos, laps);
+  $('cols').innerHTML = cols.length
+    ? cols.map(function(c){ return columnHtml(c, rows, auto, maxLap, posChannels(cfg.channel_pos)); }).join('')
+    : '<div class="empty">channel_pos が未設定です（fpvt2google.json）</div>';
+  const st = s.stats||{};
+  $('foot').textContent = '受信 '+st.recv+' 件 / ラップ送信 '+st.lap_sent+' 件'+
+    (st.invalid_skipped ? ' / 無効検出 '+st.invalid_skipped : '')+
+    (st.dup_skipped ? ' / 重複 '+st.dup_skipped : '')+
+    (laps.length ? '' : '　— このヒートのラップはまだありません');
+});
+""")
+
+QUALIFY_HTML = page("予選順位表 — FPVTrackside", """
+<h1>予選順位表 <span class="badge" id="state">-</span></h1>
+<div class="meta" id="info">-</div>
+<div id="table"></div>
+""", """
+poll(function(s){
+  const q = s.qualify||{};
+  $('state').textContent = q.rows ? '保持中' : 'なし';
+  $('state').className = 'badge'+(q.rows ? ' qualify' : '');
+  $('info').textContent = q.rows
+    ? (q.name||'')+'　/　Type=qualify　/　取得 '+(q.timestamp||'-')+
+      (ago(q.updatedAt)!=null ? '　/　'+ago(q.updatedAt)+'秒前に更新' : '')+
+      '　/　予選終了時の内容で固定（勝ち上がり戦に入っても変わらない）'
+    : 'Type=qualify の順位表がまだ届いていません（Stages.json を監視中）';
+  $('table').innerHTML = standingsTable(q, true);
+}, 2000);
+""")
+
+STANDINGS_HTML = page("最新順位 — FPVTrackside", """
+<h1>最新順位 <span class="badge" id="state">-</span></h1>
+<div class="meta" id="info">-</div>
+<div id="table"></div>
+""", """
+poll(function(s){
+  const st = s.standings||{}, type = st.type||'';
+  $('state').textContent = type==='final' ? '勝ち上がり・決勝' : (type==='qualify' ? '予選' : '-');
+  $('state').className = 'badge'+(type ? ' '+type : '');
+  if(st.rows){
+    const a = ago(st.updatedAt);
+    const ageText = a==null ? '' : (a>120
+      ? '　/　<span class="stale">'+a+'秒前に更新（止まっています）</span>'
+      : '　/　'+a+'秒前に更新');
+    $('info').innerHTML = esc((st.name||'')+'　/　Type='+type+'　/　'+(st.timestamp||''))+
+      ageText+'　/　出典: Stages.json（Lua standings）';
+  }else{
+    $('info').textContent = '順位表はまだありません（Stages.json を監視中）';
+  }
+  $('table').innerHTML = standingsTable(st, true);
+}, 2000);
+""")
+
+LIVE_HTML = page("ライブ（診断） — FPVTrackside", """
+<h1>ライブ（診断） <span class="badge" id="type">-</span></h1>
 <div class="meta" id="heat">-</div>
 <h2>ラップ</h2>
-<table><thead><tr><th class="num">Pos</th><th>Pilot</th><th>Ch</th>
-<th class="num">Lap</th><th class="num">Lap Time</th><th class="num">Total</th></tr></thead>
-<tbody id="laps"></tbody></table>
-<h2>順位表</h2>
-<table><thead id="shead"></thead><tbody id="sbody"></tbody></table>
+<div id="laps"></div>
+<h2>順位表（生の値）</h2>
+<div id="table"></div>
 <div class="meta" id="stats">-</div>
-<script>
-const $=id=>document.getElementById(id);
-const fmt=v=>v==null?'-':(typeof v==='number'?v.toFixed(2):v);
-async function tick(){
-  let s; try{ s=await (await fetch('state',{cache:'no-store'})).json(); }
-  catch(e){ $('stats').textContent='state 取得失敗'; return; }
-  const h=s.heat||{};
-  $('heat').textContent=h.round?('Round '+h.round+' / Race '+h.race+
-      (h.elapsed!=null?'  経過 '+h.elapsed.toFixed(0)+'s':'')):'レース待機';
-  $('laps').innerHTML=(s.laps||[]).map(r=>'<tr><td class="num big">'+(r.pos??'-')+
-      '</td><td>'+(r.pilot||'')+(r.finished?' ★':'')+'</td><td>'+(r.channel||'')+
-      '</td><td class="num big">'+(r.holeshot?'HS':(r.lap??'-'))+'</td><td class="num">'+fmt(r.laptime)+
-      '</td><td class="num">'+fmt(r.total)+'</td></tr>').join('')||
-      '<tr><td colspan="6" class="meta">データなし</td></tr>';
-  const st=s.standings||{};
-  $('type').textContent=st.type||'-';
-  const heads=['#'].concat(st.headings&&st.headings.length?st.headings:['-']);
-  $('shead').innerHTML='<tr>'+heads.map((h,i)=>'<th'+(i===0?' class="num"':'')+'>'+h+'</th>').join('')+'</tr>';
-  $('sbody').innerHTML=(st.rows||[]).map((r,i)=>'<tr><td class="num">'+(i+1)+'</td>'+
-      r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')||
-      '<tr><td class="meta">データなし</td></tr>';
-  const age=st.updatedAt?Math.round(Date.now()/1000-st.updatedAt):null;
-  $('stats').textContent='recv '+s.stats.recv+' / lap送信 '+s.stats.lap_sent+
-    ' / standings送信 '+s.stats.standings_sent+' / 失敗 lap '+s.stats.lap_failed+
-    ' standings '+s.stats.standings_failed+(age!=null?' / 順位表 '+age+'秒前':'');
+""", """
+poll(function(s){
+  $('heat').textContent = heatLine(s.heat);
+  $('type').textContent = (s.standings||{}).type || '-';
+  const laps = s.laps||[];
+  $('laps').innerHTML = laps.length
+    ? '<table><thead><tr><th class="num">Pos</th><th>Pilot</th><th>Ch</th>'+
+      '<th class="num">Lap</th><th class="num">Lap Time</th><th class="num">Best</th>'+
+      '<th class="num">Total</th></tr></thead><tbody>'+
+      laps.map(function(r){
+        return '<tr><td class="num big">'+(r.pos==null?'-':r.pos)+'</td><td>'+esc(r.pilot)+
+          (r.finished?' ★':'')+'</td><td>'+esc(r.channel)+'</td><td class="num big">'+
+          (r.holeshot?'HS':(r.lap==null?'-':r.lap))+'</td><td class="num">'+fmt(r.laptime)+
+          '</td><td class="num">'+fmt(r.bestlap)+'</td><td class="num">'+fmt(r.total)+'</td></tr>';
+      }).join('')+'</tbody></table>'
+    : '<div class="empty">データなし</div>';
+  $('table').innerHTML = standingsTable(s.standings, false);
+  const st = s.stats||{}, a = ago((s.standings||{}).updatedAt);
+  $('stats').textContent = 'recv '+st.recv+' / lap送信 '+st.lap_sent+
+    ' / standings送信 '+st.standings_sent+' / 失敗 lap '+st.lap_failed+
+    ' standings '+st.standings_failed+(a!=null ? ' / 順位表 '+a+'秒前' : '')+
+    ' / '+(s.hello&&s.hello.fpvtVersion ? 'fpvt '+s.hello.fpvtVersion : 'Hello 未受信');
+});
+""")
+
+PAGES = {
+    "/": INDEX_HTML, "/index.html": INDEX_HTML,
+    "/stat": STAT_HTML, "/qualify": QUALIFY_HTML,
+    "/standings": STANDINGS_HTML, "/live": LIVE_HTML,
 }
-tick(); setInterval(tick,1000);
-</script></body></html>
-"""
+ASSETS = {
+    "/shared.css": ("text/css; charset=utf-8", SHARED_CSS),
+    "/shared.js": ("application/javascript; charset=utf-8", SHARED_JS),
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -877,6 +1225,10 @@ def load_config(path, overrides):
         if not isinstance(loaded, dict):
             raise ValueError("設定ファイルは JSON オブジェクトにしてください: %s" % path)
         cfg.update(loaded)
+        # 旧名 dry_run の設定ファイルも受け付ける。黙って無視すると POST が復活するので読み替える
+        if "local_only" not in loaded and "dry_run" in loaded:
+            cfg["local_only"] = bool(loaded["dry_run"])
+        cfg.pop("dry_run", None)
     for key, value in (overrides or {}).items():
         if value is not None:
             cfg[key] = value
@@ -924,7 +1276,8 @@ def parse_args(argv):
                    help="同じ選手・同じ周回をまとめる窓（秒。既定 0.25）")
     p.add_argument("--lap-senders", type=int, dest="lap_senders",
                    help="ラップ POST の並列数（既定 1＝直列。Google 側が並行実行に耐えるなら増やす）")
-    p.add_argument("--dry-run", action="store_true", help="送信せず内容をログに出す")
+    p.add_argument("--local-only", action="store_true",
+                   help="Google へ POST せずローカル表示だけ動かす（送信する内容はログに出す）")
     p.add_argument("--record", help="受信した生イベントを JSONL で保存")
     p.add_argument("--replay", help="JSONL を再生して送信（--record のファイルを使う）")
     p.add_argument("--speed", type=float, dest="replay_speed", help="再生速度（既定 1.0）")
@@ -980,13 +1333,14 @@ def main(argv=None):
     else:
         log("警告: 設定ファイルが見つからないので既定値で動作します（探索: %s）。"
             "--init で雛形を作れます" % " / ".join(config_candidates()))
-    if not cfg["google_lap_url"]:
-        log("警告: google_lap_url が未設定（ラップデータは送信しません）")
-    if not cfg["google_standings_url"]:
-        log("警告: google_standings_url が未設定（順位表は送信しません）")
+    if cfg["local_only"]:
+        log("ローカル表示のみ（Google へ POST しません）")
+    else:
+        if not cfg["google_lap_url"]:
+            log("警告: google_lap_url が未設定（ラップデータは送信しません）")
+        if not cfg["google_standings_url"]:
+            log("警告: google_standings_url が未設定（順位表は送信しません）")
     log("channel_pos = %s" % json.dumps(cfg["channel_pos"], ensure_ascii=False))
-    if cfg["dry_run"]:
-        log("dry-run モード（POST しません）")
 
     try:
         relay.start()
