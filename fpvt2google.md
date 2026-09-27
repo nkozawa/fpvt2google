@@ -498,6 +498,8 @@ Google シートの `RaceStatus`（`GAS/raceStat.gs`）と同じ見せ方を再�
 - 棒の下に**最終ラップ・ベスト・総飛行時間**と**選手名＋チャンネル**（`finished` は ★）
 - `RaceStart` で全列をクリアする（シートと同じ）
 
+![レース・ステータス](img/fpvt2google_racestatus.png)
+
 ベストは中継側で畳み込む（`best_lap()`）。`board` は最新1件しか持たないので、
 ラップが届くたびにヒート内の最小値を更新している。
 
@@ -515,6 +517,8 @@ Google シートの `RaceStatus`（`GAS/raceStat.gs`）と同じ見せ方を再�
   読み替えは**表示だけ**で、`/state` の JSON と `/live` は生の値のまま。
   生の値はセルの `title` 属性に残す
 - 順位表の更新が120秒以上止まっていると `/standings` に警告を出す
+
+![最新順位](img/fpvt2google_standings.png)
 
 ### `/state` の JSON スキーマ
 

@@ -455,6 +455,8 @@ Reproduces the same layout as the Google Sheet's `RaceStatus` (`GAS/raceStat.gs`
 - Below each bar: **last lap / best lap / total flight time** and **pilot name + channel** (`finished` = ★)
 - `RaceStart` clears all columns (same as the sheet)
 
+![Race status](img/fpvt2google_racestatus.png)
+
 Best lap is accumulated on the relay side (`best_lap()`). `board` only keeps the latest entry per pilot, so the minimum lap time within the heat is updated each time a new lap arrives.
 
 ### 8.2 Qualification Standings (`/qualify`) and Latest Standings (`/standings`)
@@ -470,6 +472,8 @@ Best lap is accumulated on the relay side (`best_lap()`). `board` only keeps the
   Translation is **display-only**; `/state` JSON and `/live` show raw values.
   Raw values are preserved in the cell's `title` attribute
 - A warning is shown on `/standings` if standings have not updated for 120+ seconds
+
+![Latest standings](img/fpvt2google_standings.png)
 
 ### `/state` JSON Schema
 
