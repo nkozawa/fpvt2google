@@ -260,20 +260,20 @@ def pick_stage(stages, script_format):
 
 
 def classify_standings(card):
-    """Lua の順位表が予選フェーズか勝ち上がり/決勝フェーズかを判定する
+    """Lua の順位表が公式練習か、予選か、勝ち上がり/決勝フェーズかを判定する
 
     ladder_finals.lua は予選中 Headings=[Laps,Time] の2列、
     勝ち上がり開始後は [Laps,Time,Status] の3列を返す。
+    公式練習も3列（Status に "practice n/N"）なので、列数より先に Status を見る。
     """
-    headings = card.get("Headings") or []
-    if len(headings) >= 3:
+    tails = [str((row.get("Values") or [""])[-1])
+             for row in card.get("Rows") or [] if row.get("Values")]
+    if any(text.startswith("practice") for text in tails):
+        return "practice"
+    if len(card.get("Headings") or []) >= 3:
         return "final"
-    for row in card.get("Rows") or []:
-        values = row.get("Values") or []
-        if values:
-            text = str(values[-1])
-            if "ladder" in text or "final" in text or text == "cut":
-                return "final"
+    if any("ladder" in text or "final" in text or text == "cut" for text in tails):
+        return "final"
     return "qualify"
 
 
@@ -852,6 +852,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
        font-size:13px;vertical-align:middle}
 .badge.qualify{background:#1d4030}
 .badge.final{background:#4a2136}
+.badge.practice{background:#4a3d1c}
 .stale{color:#f80}
 .empty{color:var(--muted);padding:24px 0}
 nav.top{font-size:14px;margin:0 0 12px}
@@ -946,12 +947,19 @@ function heatLine(h){
 function transStatus(text){
   if(text==null || text==='') return '';
   return String(text)
+    .replace('practice','公式練習')
     .replace('cut','順位確定(予選)')
     .replace('out','順位確定(勝ち上がり戦)')
     .replace('advances','上位へ勝ち上がり')
     .replace('enters','勝ち上がり戦')
     .replace('finalist','決勝戦進出')
     .replace('final','決勝戦');
+}
+// 順位表の Type（/state の standings.type）の表示名
+function typeLabel(type){
+  return type==='practice' ? '公式練習'
+       : type==='final'    ? '勝ち上がり・決勝'
+       : type==='qualify'  ? '予選' : '-';
 }
 function standingsTable(st, translate){
   if(!st || !st.rows || !st.rows.length) return '<div class="empty">データなし</div>';
@@ -1011,7 +1019,7 @@ INDEX_HTML = page("FPVTrackside ローカル表示", """
 poll(function(s){
   const st = s.standings||{}, q = s.qualify||{}, stats = s.stats||{};
   $('now').textContent = heatLine(s.heat);
-  $('foot').textContent = '最新順位: '+(st.type||'なし')+(st.name?'（'+st.name+'）':'')+
+  $('foot').textContent = '最新順位: '+(st.type ? typeLabel(st.type) : 'なし')+(st.name?'（'+st.name+'）':'')+
     '　/　予選順位表: '+(q.rows?'保持中':'なし')+
     '　/　受信 '+stats.recv+' 件・ラップ送信 '+stats.lap_sent+' 件'+
     ((stats.lap_failed||stats.standings_failed)
@@ -1131,7 +1139,7 @@ STANDINGS_HTML = page("最新順位 — FPVTrackside", """
 """, """
 poll(function(s){
   const st = s.standings||{}, type = st.type||'';
-  $('state').textContent = type==='final' ? '勝ち上がり・決勝' : (type==='qualify' ? '予選' : '-');
+  $('state').textContent = typeLabel(type);
   $('state').className = 'badge'+(type ? ' '+type : '');
   if(st.rows){
     const a = ago(st.updatedAt);

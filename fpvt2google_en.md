@@ -345,7 +345,7 @@ Sent only when `Stages.json` changes. One payload per POST.
 | Field | Type | Description |
 |---|---|---|
 | `timestamp` | string | Data creation time (local time). Always the first key |
-| `Type` | string | `"qualify"` (qualification) / `"final"` (ladder finals) |
+| `Type` | string | `"qualify"` (qualification) / `"final"` (ladder finals) / `"practice"` (official practice) |
 | `stages` | array | Full `Stages.json` content (when `standings_payload="full"`) |
 
 `standings_payload` changes the body structure (`timestamp` and `Type` are always first):
@@ -360,12 +360,16 @@ Sent only when `Stages.json` changes. One payload per POST.
 
 Determined from the Lua script `ladder_finals.lua` standings structure:
 
-1. `Standings.Headings` has **3+ columns** (`Laps, Time, Status`) → `final`
-2. 2 columns (`Laps, Time`) but the last column text contains `ladder` / `final` / `cut` → `final`
-3. Otherwise → `qualify`
+1. The last column text starts with `practice` (e.g. `practice 1/2`) → `practice` (official practice)
+2. `Standings.Headings` has **3+ columns** (`Laps, Time, Status`) → `final`
+3. 2 columns (`Laps, Time`) but the last column text contains `ladder` / `final` / `cut` → `final`
+4. Otherwise → `qualify`
 
-> **Changing the standings column layout in `ladder_finals.lua` will affect this detection.**
-> Update `classify_standings()` accordingly.
+> The **official-practice card from `ladder_finals.lua` also has three columns**
+> (`Laps, Time, Status`), so the Status text is checked before the column count
+> to tell it apart from the ladder/final phase (`PRACTICE_ROUNDS`).
+> **Changing the standings column layout or the Status wording in `ladder_finals.lua`
+> will affect this detection.** Update `classify_standings()` accordingly.
 
 #### Reading the Standings
 
@@ -436,7 +440,7 @@ via `/shared.css` and `/shared.js` (both served from strings embedded in the rel
 |---|---|---|
 | `http://localhost:5705/` | Table of contents (links to 4 pages + current state summary) | 1s |
 | `…/stat` | **Race status** (bar graph). Per-pilot lap count, last/best lap time, total flight time (equivalent to Google Sheet's `RaceStatus`) | 1s |
-| `…/qualify` | **Qualification standings**. Freezes the last `Type=qualify` snapshot (unchanged after ladder finals begin) | 2s |
+| `…/qualify` | **Qualification standings**. Freezes the last `Type=qualify` snapshot (unchanged after ladder finals begin; official practice does not overwrite it) | 2s |
 | `…/standings` | **Latest standings**. Shows qualification standings during qualifying, automatically switches to ladder/final standings once finals begin | 2s |
 | `…/live` | Diagnostics. Received lap list, raw standings values, send statistics | 1s |
 | `…/state` | State JSON (usable from custom display pages) | — |
@@ -462,12 +466,21 @@ Best lap is accumulated on the relay side (`best_lap()`). `board` only keeps the
 ### 8.2 Qualification Standings (`/qualify`) and Latest Standings (`/standings`)
 
 - `/standings` shows the latest `Stages.json` snapshot as-is (with `Type` badge).
-  During qualification it shows qualification standings; once finals begin it **automatically switches** to ladder/final standings
+  The badge reads "official practice" during practice, "qualification" during qualifying,
+  and it **automatically switches** to ladder/final standings once finals begin
 - `/qualify` freezes and shows the **last** `Type=qualify` snapshot
-  (equivalent to the sheet's "Qualification Standings"). It is not overwritten by finals content.
+  (equivalent to the sheet's "Qualification Standings"). It is not overwritten by
+  finals or official-practice content.
   Stored in memory only — **lost on relay restart** (after restart, `Stages.json` already contains finals data and cannot be restored)
+- **Official practice** (`Type=practice`) is the unranked reference card produced by
+  `ladder_finals.lua`'s `PRACTICE_ROUNDS`; its Status column reads `practice 1/2`
+  (practice rounds flown / total). That card has the same three columns as the ladder
+  phase, so **the Status text is checked before the column count** (§7.2).
+  On the sheet side, `GAS/raceResult.gs` now writes to the qualification sheet
+  **only when `Type=qualify`**, so practice results cannot pollute it
+  (changed from `Type != final` on 2026-09-28 — **the Apps Script must be re-pasted**)
 - Status column values are translated to Japanese for display (same as `GAS/raceResult.gs`'s `trans()`):
-  `cut`→順位確定(予選), `out`→順位確定(勝ち上がり戦), `advances`→上位へ勝ち上がり,
+  `practice`→公式練習, `cut`→順位確定(予選), `out`→順位確定(勝ち上がり戦), `advances`→上位へ勝ち上がり,
   `enters`→勝ち上がり戦, `finalist`→決勝戦進出, `final`→決勝戦.
   Translation is **display-only**; `/state` JSON and `/live` show raw values.
   Raw values are preserved in the cell's `title` attribute
@@ -572,10 +585,10 @@ Best lap is accumulated on the relay side (`best_lap()`). `board` only keeps the
 ### 11.1 Tests
 
 ```bash
-python3 test/fpvt2google_test.py       # 46 tests (unittest)
+python3 test/fpvt2google_test.py       # 49 tests (unittest)
 ```
 
-Tests use a fake Google endpoint (local HTTP server) and a fake event folder, verifying: receive → format → dedup → send / `pos` translation / holeshot lap count / sector, invalid, and duplicate filtering / lap count (1-based, holeshot=0) / **same-pilot different-lap dedup** / **lap ordering preserved with slow Google (serial and parallel)** / `RaceStart` immediate send / Stages.json monitoring and `Type` detection / stage selection / 302 redirect re-POST / 500 retry / local-only / record and replay / config loading and search order (current dir priority, `--config` missing = error, `--init` output location) / **all local display pages and `/shared.css` / `/shared.js` / `/state` delivery** / **best lap accumulation (holeshot excluded)** / board clear on `RaceStart` / **qualification standings not overwritten by finals** / standings snapshot stage name and timestamp.
+Tests use a fake Google endpoint (local HTTP server) and a fake event folder, verifying: receive → format → dedup → send / `pos` translation / holeshot lap count / sector, invalid, and duplicate filtering / lap count (1-based, holeshot=0) / **same-pilot different-lap dedup** / **lap ordering preserved with slow Google (serial and parallel)** / `RaceStart` immediate send / Stages.json monitoring and `Type` detection / stage selection / 302 redirect re-POST / 500 retry / local-only / record and replay / config loading and search order (current dir priority, `--config` missing = error, `--init` output location) / **all local display pages and `/shared.css` / `/shared.js` / `/state` delivery** / **best lap accumulation (holeshot excluded)** / board clear on `RaceStart` / **official practice (`practice`) told apart from qualification and finals** / **qualification standings not overwritten by finals** / standings snapshot stage name and timestamp.
 
 Also run the Lua-side tests (`test/ladder_finals_test.lua` etc.).
 
@@ -631,7 +644,7 @@ python3 tools/fpvt2google.py --replay cap.jsonl --speed 1      # Replay (real-ti
 | band / ShortBand | Frequency band. FPVTrackside sends the long name (`Fatshark`) in PUT JSON, not the short name (`F`). This program translates using the §6.3 table |
 | `position` | Race position calculated by FPVTrackside |
 | Standings | Standings table returned by Lua `standings()`. Saved in `Stages.json` |
-| `Type` | Standings phase. `qualify` (qualification) / `final` (ladder finals) |
+| `Type` | Standings phase. `qualify` (qualification) / `final` (ladder finals) / `practice` (official practice) |
 | Tier (tie) | A single matchup in the ladder finals. Competed in `LADDER_HEATS` races (terminology from `ladder_finals.lua`) |
 
 ---

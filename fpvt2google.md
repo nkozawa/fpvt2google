@@ -371,7 +371,7 @@ Apps Script の実行ログで失敗が無いか確認すること。
 | フィールド | 型 | 意味 |
 |---|---|---|
 | `timestamp` | string | **このデータを作成した時刻**（ローカルタイム、`yyyy-mm-dd hh:mm:ss`）。常に先頭のキー |
-| `Type` | string | `"qualify"`（予選）/ `"final"`（勝ち上がり戦・決勝） |
+| `Type` | string | `"qualify"`（予選）/ `"final"`（勝ち上がり戦・決勝）/ `"practice"`（公式練習） |
 | `stages` | array | `Stages.json` の全内容（`standings_payload="full"` の場合） |
 
 `standings_payload` を変えると本体の形が変わる（`timestamp` と `Type` は常に先頭）:
@@ -386,11 +386,14 @@ Apps Script の実行ログで失敗が無いか確認すること。
 
 Lua スクリプト `ladder_finals.lua` の順位表の形から判定する:
 
-1. `Standings.Headings` が **3列以上**（`Laps, Time, Status`）→ `final`
-2. 2列（`Laps, Time`）でも、最終列の文字列に `ladder` / `final` / `cut` を含む → `final`
-3. それ以外 → `qualify`
+1. 最終列の文字列が `practice` で始まる（`practice 1/2` など）→ `practice`（公式練習）
+2. `Standings.Headings` が **3列以上**（`Laps, Time, Status`）→ `final`
+3. 2列（`Laps, Time`）でも、最終列の文字列に `ladder` / `final` / `cut` を含む → `final`
+4. それ以外 → `qualify`
 
-> したがって **`ladder_finals.lua` の順位表の列構成を変えると判定が変わります**。
+> `ladder_finals.lua` の**公式練習のカードも `Laps, Time, Status` の3列**なので、
+> 列数より先に Status を見て勝ち上がり・決勝と区別します（`PRACTICE_ROUNDS`）。
+> したがって **`ladder_finals.lua` の順位表の列構成や Status の綴りを変えると判定が変わります**。
 > 列構成を変えた場合は `classify_standings()` も合わせてください。
 
 #### 順位表（Standings）の読み方
@@ -474,7 +477,7 @@ function doPost(e) {
 |---|---|---|
 | `http://localhost:5705/` | 目次（4ページへのリンク＋現在の状態の要約） | 1秒 |
 | `…/stat` | **レース・ステータス**（棒グラフ）。ヒート中の周回数・最終／ベストラップ・総飛行時間（Google シートの `RaceStatus` に相当） | 1秒 |
-| `…/qualify` | **予選順位表**。`Type=qualify` の最後の内容を凍結して保持（勝ち上がり戦に入っても変わらない） | 2秒 |
+| `…/qualify` | **予選順位表**。`Type=qualify` の最後の内容を凍結して保持（勝ち上がり戦に入っても変わらない。公式練習では上書きしない） | 2秒 |
 | `…/standings` | **最新順位**。予選中は予選順位、勝ち上がり戦に入ると最新の結果を1ページで表示 | 2秒 |
 | `…/live` | 診断用。受信したラップの一覧・順位表の生の値・送信統計 | 1秒 |
 | `…/state` | 状態の JSON（自作の表示ページからも使える） | — |
@@ -506,14 +509,22 @@ Google シートの `RaceStatus`（`GAS/raceStat.gs`）と同じ見せ方を再�
 ### 8.2 予選順位表（`/qualify`）と最新順位（`/standings`）
 
 - `/standings` は `Stages.json` の最新スナップショットをそのまま出す（`Type` バッジ付き）。
-  予選中は予選順位、勝ち上がり戦に入ると勝ち上がり・決勝の順位に**自動で切り替わる**
+  公式練習中は「公式練習」、予選中は「予選」、勝ち上がり戦に入ると「勝ち上がり・決勝」に
+  **自動で切り替わる**
 - `/qualify` は `Type=qualify` の**最後の**スナップショットをメモリに凍結して出す
-  （シートの「予選順位表」に相当）。勝ち上がり戦の内容では上書きされない。
+  （シートの「予選順位表」に相当）。勝ち上がり戦や公式練習の内容では上書きされない。
   メモリだけなので**中継を再起動すると消える**（再起動後は `Stages.json` が既に
   勝ち上がり戦の内容になっているため復元できない）
+- **公式練習**（`Type=practice`）は `ladder_finals.lua` の `PRACTICE_ROUNDS` が出す
+  「順位を付けない参考表示」で、Status 列が `practice 1/2`（飛んだ練習回数/総数）になる。
+  カードは勝ち上がり戦と同じ3列なので、**列数より先に Status を見て**判定する（§7.2）。
+  シート側も `GAS/raceResult.gs` が **`Type=qualify` のときだけ予選順位表に書く**ので、
+  練習の結果で予選順位表が汚れない（2026-09-28 に `Type != final` から変更。
+  **Apps Script の貼り直しが必要**）
 - Status 列はシート（`GAS/raceResult.gs` の `trans()`）と同じ日本語に読み替えて出す
-  （`cut`→順位確定(予選)、`out`→順位確定(勝ち上がり戦)、`advances`→上位へ勝ち上がり、
-  `enters`→勝ち上がり戦、`finalist`→決勝戦進出、`final`→決勝戦）。
+  （`practice`→公式練習、`cut`→順位確定(予選)、`out`→順位確定(勝ち上がり戦)、
+  `advances`→上位へ勝ち上がり、`enters`→勝ち上がり戦、`finalist`→決勝戦進出、
+  `final`→決勝戦）。
   読み替えは**表示だけ**で、`/state` の JSON と `/live` は生の値のまま。
   生の値はセルの `title` 属性に残す
 - 順位表の更新が120秒以上止まっていると `/standings` に警告を出す
@@ -624,7 +635,7 @@ Google シートの `RaceStatus`（`GAS/raceStat.gs`）と同じ見せ方を再�
 ### 11.1 テスト
 
 ```bash
-python3 test/fpvt2google_test.py       # 46件（unittest）
+python3 test/fpvt2google_test.py       # 49件（unittest）
 ```
 
 偽の Google エンドポイント（ローカル HTTP サーバ）と偽のイベントフォルダを使い、
@@ -635,6 +646,7 @@ python3 test/fpvt2google_test.py       # 46件（unittest）
 設定の読込と探索順（実行ディレクトリ優先・`--config` の不在はエラー・`--init` の出力先）／
 **ローカル表示の全ページと `/shared.css`・`/shared.js`・`/state` の配信**／
 **ベストラップの畳み込み（holeshot は数えない）**／`RaceStart` での board クリア／
+**公式練習（`practice`）を予選・勝ち上がりと区別すること**／
 **予選順位表が勝ち上がり戦で上書きされないこと**／順位表スナップショットのステージ名と時刻。
 
 Lua 側のテスト（`test/ladder_finals_test.lua` 等）も合わせて実行すること。
@@ -701,7 +713,7 @@ python3 tools/fpvt2google.py --replay cap.jsonl --speed 1      # 実時間どお
 | band / ShortBand | 周波数バンド。FPVTrackside は PUT の JSON に長い名前（`Fatshark`）で `band` を入れ、短縮名（`F`）は入れない。本プログラムが §6.3 の表で読み替える |
 | `position` | FPVTrackside が計算したレース順位 |
 | Standings | Lua スクリプト `standings()` が返す順位表。`Stages.json` に保存される |
-| `Type` | 順位表のフェーズ。`qualify`（予選）/ `final`（勝ち上がり戦・決勝） |
+| `Type` | 順位表のフェーズ。`qualify`（予選）/ `final`（勝ち上がり戦・決勝）/ `practice`（公式練習） |
 | 段（tie） | 勝ち上がり戦の1つの対戦。`LADDER_HEATS` レースで競う（`ladder_finals.lua` の用語） |
 
 ---

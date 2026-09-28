@@ -7,8 +7,11 @@ const finalSheet = sheet.getSheetByName('順位表');
 
 // todo
 // - コメントの日本語化
-//   
-// - 予選は順位表と予選順位表の両方に書く
+//
+// 書き込み先: 予選（Type=qualify）は「順位表」と「予選順位表」の両方、
+// それ以外（公式練習 practice / 勝ち上がり・決勝 final）は「順位表」だけ。
+// 予選順位表は予選終了時の内容を保持しておくためのものなので、
+// 公式練習や勝ち上がりの結果で上書きしない。
 
 //function test() {
 //  let rawdataSheet = sheet.getSheetByName('RAWDATA');
@@ -21,7 +24,8 @@ const finalSheet = sheet.getSheetByName('順位表');
 
 function trans(status) {
   if (status == "") return " ";
-  let status2 = status.replace('cut', '順位確定(予選)');
+  let status2 = status.replace('practice', '公式練習');
+  status2 = status2.replace('cut', '順位確定(予選)');
   status2 = status2.replace('out', '順位確定(勝ち上がり戦)');
   status2 = status2.replace('advances','上位へ勝ち上がり');
   status2 = status2.replace('enters','勝ち上がり戦');
@@ -38,12 +42,12 @@ function dataAnal(timestamp, type, stagesData) {
   var headings = stagesData[0].Standings.Headings;
   Logger.log("ヘッダー: " + headings.join(", "));
 
-  // 書き込み先シートの決定（qualifyの場合は両方、finalの場合はfinalSheetのみ）
+  // 書き込み先シートの決定（qualify のときだけ予選順位表にも書く）
   let targetSheets = [];
-  if (type == "final") {
-    targetSheets = [finalSheet];
-  } else {
+  if (type == "qualify") {
     targetSheets = [finalSheet, qualifySheet];
+  } else {
+    targetSheets = [finalSheet];
   }
 
   let result = [];

@@ -13,7 +13,7 @@
 #### 機能
 
 - **ラップデータの中継** — ゲート通過ごとのラップタイム・総飛行時間を POST
-- **順位表の中継** — `Stages.json` を監視し、予選・決勝の順位表が変わったら POST
+- **順位表の中継** — `Stages.json` を監視し、公式練習・予選・決勝の順位表が変わったら POST
 - **ローカル表示** — `:5705` で同一 LAN からも閲覧可能なダッシュボードを提供（目次＋4ページ）
 - **録画・再生** — 受信イベントを JSONL で保存・再生してオフライン開発が可能
 
@@ -56,7 +56,7 @@ python3 fpvt2google.py
 
 | ファイル | 用途 |
 |---|---|
-| `raceResult.gs` | 順位表（予選・決勝）を受信してスプレッドシートに書き込み |
+| `raceResult.gs` | 順位表（公式練習・予選・決勝）を受信してスプレッドシートに書き込み。予選順位表には `Type=qualify` のときだけ書く |
 | `raceStat.gs` | ラップデータを受信してレース状況をリアルタイム表示 |
 
 #### 必要条件
@@ -80,7 +80,7 @@ MIT License
 #### Features
 
 - **Lap data relay** — POSTs lap times and total flight time on each gate detection
-- **Standings relay** — Monitors `Stages.json` and POSTs qualification/final standings when changed
+- **Standings relay** — Monitors `Stages.json` and POSTs practice/qualification/final standings when changed
 - **Local dashboard** — Serves a multi-page web app on `:5705` (TOC + 4 pages), accessible from any device on the same LAN
 - **Record & replay** — Captures raw events as JSONL for offline development and testing
 
@@ -123,7 +123,7 @@ The `GAS/` directory contains Google Sheets-side scripts.
 
 | File | Purpose |
 |---|---|
-| `raceResult.gs` | Receives standings (qualification/final) and writes to spreadsheet |
+| `raceResult.gs` | Receives standings (practice/qualification/final) and writes to the spreadsheet; the qualification sheet is written only when `Type=qualify` |
 | `raceStat.gs` | Receives lap data and displays real-time race status |
 
 #### Requirements
