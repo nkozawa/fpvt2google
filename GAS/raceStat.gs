@@ -1,5 +1,3 @@
-//const url = "https://docs.google.com/spreadsheets/d/1ArZOQzExKNQ1GVvxW2IaAUTiaSKguhe6OOBOBisOe-8/edit?gid=12949935#gid=12949935";
-//const sheet = SpreadsheetApp.openByUrl(url);
 const sheet = SpreadsheetApp.getActiveSpreadsheet();
 
 // todo
@@ -119,5 +117,3 @@ function doPost(e) {
     throw new Error("Lock timeout");
   }
 }
-// End of Tiny View Plus OSC process
-

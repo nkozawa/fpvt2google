@@ -1,17 +1,8 @@
-//const url = "https://docs.google.com/spreadsheets/d/1ArZOQzExKNQ1GVvxW2IaAUTiaSKguhe6OOBOBisOe-8/edit?gid=12949935#gid=12949935";
-//const sheet = SpreadsheetApp.openByUrl(url);
 const sheet = SpreadsheetApp.getActiveSpreadsheet();
 const rawdataSheet = sheet.getSheetByName('RAWDATA');
 const qualifySheet = sheet.getSheetByName('予選順位表');
 const finalSheet = sheet.getSheetByName('順位表');
 
-// todo
-// - コメントの日本語化
-//
-// 書き込み先: 予選（Type=qualify）は「順位表」と「予選順位表」の両方、
-// それ以外（公式練習 practice / 勝ち上がり・決勝 final）は「順位表」だけ。
-// 予選順位表は予選終了時の内容を保持しておくためのものなので、
-// 公式練習や勝ち上がりの結果で上書きしない。
 
 //function test() {
 //  let rawdataSheet = sheet.getSheetByName('RAWDATA');
@@ -24,13 +15,13 @@ const finalSheet = sheet.getSheetByName('順位表');
 
 function trans(status) {
   if (status == "") return " ";
-  let status2 = status.replace('practice', '公式練習');
-  status2 = status2.replace('cut', '順位確定(予選)');
+  let status2 = status.replace('cut', '順位確定(予選)');
   status2 = status2.replace('out', '順位確定(勝ち上がり戦)');
   status2 = status2.replace('advances','上位へ勝ち上がり');
   status2 = status2.replace('enters','勝ち上がり戦');
   status2 = status2.replace('finalist', '決勝戦進出')
   status2 = status2.replace('final', '決勝戦')
+  status2 = status2.replace('practice', '公式練習')
   return status2;
 }
 
@@ -42,13 +33,20 @@ function dataAnal(timestamp, type, stagesData) {
   var headings = stagesData[0].Standings.Headings;
   Logger.log("ヘッダー: " + headings.join(", "));
 
-  // 書き込み先シートの決定（qualify のときだけ予選順位表にも書く）
+  // 書き込み先シートの決定（qualifyの場合は両方、finalの場合はfinalSheetのみ）
+  let roundType = "";
   let targetSheets = [];
-  if (type == "qualify") {
-    targetSheets = [finalSheet, qualifySheet];
-  } else {
+  if (type == "final") {
     targetSheets = [finalSheet];
+    roundType = "勝ち上がり・決勝";
+  } else if (type == "qualify")  {
+    targetSheets = [finalSheet, qualifySheet];
+    roundType = "予選";
+  } else if (type == "practice") {
+    targetSheets = [finalSheet];
+    roundType = "公式練習";
   }
+  finalSheet.getRange("E3").setValue(roundType);
 
   let result = [];
   var rows = stagesData[0].Standings.Rows;
