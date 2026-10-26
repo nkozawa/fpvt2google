@@ -350,7 +350,8 @@ class Relay:
         self.qualify = {}               # 予選順位表（Type=qualify の最後の内容を凍結して保持）
         self.stats = {"recv": 0, "lap_sent": 0, "lap_failed": 0,
                       "standings_sent": 0, "standings_failed": 0,
-                      "sector_skipped": 0, "invalid_skipped": 0, "dup_skipped": 0}
+                      "sector_skipped": 0, "invalid_skipped": 0, "dup_skipped": 0,
+                      "short_skipped": 0}
         self._seen = OrderedDict()      # detectionId の重複排除
         self._record_fh = None
         if cfg["record"]:
@@ -463,6 +464,17 @@ class Relay:
                 self._seen[did] = True
                 while len(self._seen) > 4096:
                     self._seen.popitem(last=False)
+
+        laptime = ev.get("lapTimeSoFar")
+        if laptime is not None:
+            try:
+                laptime_f = float(laptime)
+            except (TypeError, ValueError):
+                laptime_f = None
+            if laptime_f is not None and laptime_f <= 3.0:
+                with self.lock:
+                    self.stats["short_skipped"] += 1
+                return
 
         payload = shape_detection(ev, self.cfg, self.decimals())
         key = (payload["round"], payload["race"],
@@ -1110,7 +1122,8 @@ poll(function(s){
   $('foot').textContent = '受信 '+st.recv+' 件 / ラップ送信 '+st.lap_sent+' 件'+
     (st.invalid_skipped ? ' / 無効検出 '+st.invalid_skipped : '')+
     (st.dup_skipped ? ' / 重複 '+st.dup_skipped : '')+
-    (laps.length ? '' : '　— このヒートのラップはまだありません');
+    (st.short_skipped ? ' / 3秒以下 '+st.short_skipped : '')+
+    (laps.length ? '' : ' — このヒートのラップはまだありません');
 });
 """)
 
@@ -1143,9 +1156,9 @@ poll(function(s){
   $('state').className = 'badge'+(type ? ' '+type : '');
   if(st.rows){
     const a = ago(st.updatedAt);
-    const ageText = a==null ? '' : (a>120
-      ? '　/　<span class="stale">'+a+'秒前に更新（止まっています）</span>'
-      : '　/　'+a+'秒前に更新');
+    const ageText = a==null ? '' : (a>600
+      ? ' / <span class="stale">'+a+'秒前に更新</span>'
+      : ' / '+a+'秒前に更新');
     $('info').innerHTML = esc((st.name||'')+'　/　Type='+type+'　/　'+(st.timestamp||''))+
       ageText+'　/　出典: Stages.json（Lua standings）';
   }else{
